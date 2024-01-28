@@ -49,7 +49,7 @@ func main() {
 	router := gin.Default()
 	router.Use(CORSMiddleware())
 	router.POST("/", scrape)
-	router.POST("/details", getDetails2)
+	// router.POST("/details", getDetails2)
 
 	router.Run("localhost:8080")
 }
@@ -192,21 +192,22 @@ func getDetails(c *gin.Context, url string) (response BookResponse) {
 	return response
 }
 
-func getDetails2(c *gin.Context) {
-	pr := PageRequest{Url: ""}
+/* for testing purposes */
+// func getDetails2(c *gin.Context) {
+// 	pr := PageRequest{Url: ""}
 
-	if err := c.ShouldBindJSON(&pr); err != nil {
-		// Handle error (e.g., invalid JSON format)
-		c.JSON(http.StatusBadRequest, gin.H{"400 error": err.Error()})
-		return
-	}
+// 	if err := c.ShouldBindJSON(&pr); err != nil {
+// 		// Handle error (e.g., invalid JSON format)
+// 		c.JSON(http.StatusBadRequest, gin.H{"400 error": err.Error()})
+// 		return
+// 	}
 
-	var response []BookResponse
+// 	var response []BookResponse
 
-	response = append(response, getDetails(c, pr.Url))
+// 	response = append(response, getDetails(c, pr.Url))
 
-	c.IndentedJSON(http.StatusOK, response)
-}
+// 	c.IndentedJSON(http.StatusOK, response)
+// }
 func removeHTMLTags(input string) string {
 	// Define the regular expression pattern for HTML tags
 	htmlTagRegex := regexp.MustCompile("<[^>]+>")
