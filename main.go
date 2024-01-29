@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"math"
@@ -18,7 +20,10 @@ import (
 )
 
 type PageRequest struct {
-	Url string `json:"url"`
+	StartId  int    `json:"start_id"`
+	Genre    string `json:"genre"`
+	Url      string `json:"url"`
+	FileName string `json:"file_name"`
 }
 
 type AllLinks struct {
@@ -26,30 +31,31 @@ type AllLinks struct {
 }
 
 type BookResponse struct {
-	ImageUrl           string   `json:"image_url"`
-	Title              string   `json:"title"`
-	Authors            []string `json:"authors"`
-	BindingDescription string   `json:"binding_description"`
-	Language           string   `json:"language"`
-	Description        string   `json:"description"`
-	Price              float32  `json:"price"`
-	DiscountPrice      float32  `json:"discount_price"`
-	ISBN               string   `json:"isbn"`
-	Publisher          string   `json:"publisher"`
-	PublicationDate    string   `json:"publication_date"`
-	Pages              int      `json:"pages"`
+	Id                 int     `json:"id"`
+	ImageUrl           string  `json:"imageUrl"`
+	Title              string  `json:"title"`
+	Genre              string  `json:"genre"`
+	BindingDescription string  `json:"bindingDescription"`
+	Language           string  `json:"language"`
+	Description        string  `json:"description"`
+	Price              float32 `json:"price"`
+	DiscountPrice      float32 `json:"discountPrice"`
+	ISBN               string  `json:"isbn"`
+	Publisher          string  `json:"publisher"`
+	PublicationDate    string  `json:"publicationDate"`
+	Pages              int     `json:"pages"`
+	PostedBy           int     `json:"postedBy"`
 }
 
-type PageNumber struct {
-	Number string
-	Url    string
+type BookAuthor struct {
+	BookId     int    `json:"bookId"`
+	AuthorName string `json:"authorName"`
 }
 
 func main() {
 	router := gin.Default()
 	router.Use(CORSMiddleware())
 	router.POST("/", scrape)
-	// router.POST("/details", getDetails2)
 
 	router.Run("localhost:8080")
 }
@@ -72,7 +78,7 @@ func CORSMiddleware() gin.HandlerFunc {
 
 func scrape(c *gin.Context) {
 	var response []BookResponse
-	pr := PageRequest{Url: ""}
+	pr := PageRequest{}
 
 	if err := c.ShouldBindJSON(&pr); err != nil {
 		// Handle error (e.g., invalid JSON format)
@@ -89,12 +95,22 @@ func scrape(c *gin.Context) {
 
 	allLinks := pr.getLinks(ctx)
 
-	for _, link := range allLinks.Links {
+	var authorSlice = []BookAuthor{}
+	for index, link := range allLinks.Links {
 		// wait for 5 seconds to avoid rate limit
 		time.Sleep(5 * time.Second)
 		fmt.Println(link)
-		response = append(response, getDetails(c, link))
+		response = append(response, getDetails(c, pr.StartId+index, link, &authorSlice, pr.Genre))
 	}
+
+	// write authors into json
+	authorsData, err := json.MarshalIndent(authorSlice, "", "    ")
+	if err != nil {
+		fmt.Println("Error marshaling JSON:", err)
+		return
+	}
+	writeFile(pr.FileName, authorsData)
+
 	c.IndentedJSON(http.StatusOK, response)
 }
 
@@ -116,17 +132,15 @@ func (pr *PageRequest) getLinks(ctx context.Context) (response AllLinks) {
 	return response
 }
 
-func getDetails(c *gin.Context, url string) (response BookResponse) {
-
-    
-    opts := append(chromedp.DefaultExecAllocatorOptions[:],
-        chromedp.UserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36"),
-        chromedp.Flag("enable-automation", false),
+func getDetails(c *gin.Context, id int, url string, authorSlice *[]BookAuthor, genre string) (response BookResponse) {
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.UserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36"),
+		chromedp.Flag("enable-automation", false),
 		// chromedp.Flag("headless", false),
-    )
+	)
 
-    ctx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
-    defer cancel()
+	ctx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
+	defer cancel()
 
 	// Create a new browser session
 	ctx, cancel = chromedp.NewContext(ctx)
@@ -160,9 +174,11 @@ func getDetails(c *gin.Context, url string) (response BookResponse) {
 	)
 
 	if err != nil {
-		fmt.Println("err found " , err)
+		fmt.Println("err found ", err)
 	}
 
+	response.Id = id
+	response.Genre = genre
 	response.Language = strings.Trim(language[3:], " ")
 	response.Publisher = strings.Trim(response.Publisher, " ")
 	pagesInt, _ := strconv.ParseInt(pages, 10, 32)
@@ -171,10 +187,10 @@ func getDetails(c *gin.Context, url string) (response BookResponse) {
 	// assign original price
 	oriPriceFloat, _ := strconv.ParseFloat(oriPrice, 32)
 	response.Price = float32(math.Ceil(oriPriceFloat*100) / 100)
-	/* at the time of development, there is discount on every products, 
-		randomly add discount price for variety purposes
-	 */
-	// random discount event 
+	/* at the time of development, there is discount on every products,
+	randomly add discount price for variety purposes
+	*/
+	// random discount event
 	randomNumber := rand.Intn(2) + 1
 	if randomNumber == 1 {
 		discPriceFloat, _ := strconv.ParseFloat(discPrice, 32)
@@ -184,30 +200,29 @@ func getDetails(c *gin.Context, url string) (response BookResponse) {
 	// handle authors
 	// remove "By "
 	authorNodes[0] = authorNodes[0][3:]
-	response.Authors = removeEmptyAuthors(authorNodes)
+	authorList := removeEmptyAuthors(authorNodes)
+	for _, author := range authorList {
+		*authorSlice = append(*authorSlice,
+			BookAuthor{
+				BookId:     id,
+				AuthorName: author,
+			},
+		)
+	}
 
 	// handle description
 	response.Description = removeHTMLTags(desc)
 
+	// handle date
+	response.PublicationDate = formatDate(response.PublicationDate)
+
+	// randomly assign to users
+	randomId := rand.Intn(30) + 1
+	response.PostedBy = randomId
+
 	return response
 }
 
-/* for testing purposes */
-// func getDetails2(c *gin.Context) {
-// 	pr := PageRequest{Url: ""}
-
-// 	if err := c.ShouldBindJSON(&pr); err != nil {
-// 		// Handle error (e.g., invalid JSON format)
-// 		c.JSON(http.StatusBadRequest, gin.H{"400 error": err.Error()})
-// 		return
-// 	}
-
-// 	var response []BookResponse
-
-// 	response = append(response, getDetails(c, pr.Url))
-
-// 	c.IndentedJSON(http.StatusOK, response)
-// }
 func removeHTMLTags(input string) string {
 	// Define the regular expression pattern for HTML tags
 	htmlTagRegex := regexp.MustCompile("<[^>]+>")
@@ -242,4 +257,32 @@ func authorName(name string) string {
 	splitName := strings.Split(name, ",")
 	name = splitName[0] + splitName[1]
 	return name
+}
+
+func formatDate(date string) string {
+	// Parse the input date string
+	inputDate, err := time.Parse("02/01/2006", date)
+	if err != nil {
+		fmt.Println("Error parsing date:", err)
+		return date
+	}
+
+	// Format the date in "YYYY-MM-DD" format
+	return inputDate.Format("2006-01-02")
+}
+
+func writeFile(fileName string, jsonData []byte) {
+	// Write JSON data to a file
+	file, err := os.Create(fileName)
+	if err != nil {
+		fmt.Println("Error creating file:", err)
+		return
+	}
+	defer file.Close()
+
+	_, err = file.Write(jsonData)
+	if err != nil {
+		fmt.Println("Error writing to file:", err)
+		return
+	}
 }
